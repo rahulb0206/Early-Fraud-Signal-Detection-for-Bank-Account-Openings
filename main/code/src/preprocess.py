@@ -5,6 +5,15 @@
 # Saves the fitted scaler and the four split CSVs so other notebooks
 # can just load them directly without re-running this.
 #
+# Columns dropped before training — synthetic/uninterpretable values:
+#   velocity_6h, velocity_24h, velocity_4w  — perturbed synthetic values with
+#     inverted order (6h mean > 4w mean) and negative values. Not interpretable.
+#   velocity_ratio                          — engineered from velocity, goes with them.
+#   zip_count_4w                            — up to 6,700 per zip, clearly synthetic.
+#   bank_branch_count_8w                    — up to 2,385 visits in 8 weeks, impossible.
+#   device_fraud_count                      — entire column is 0. No signal.
+#   is_dirty_device                         — derived from device_fraud_count, also all 0.
+#
 # run from main/code/: python src/preprocess.py
 
 import os
@@ -16,6 +25,12 @@ SENTINEL_COLS    = ["prev_address_months_count", "current_address_months_count",
 CATEGORICAL_COLS = ["payment_type", "employment_status", "housing_status", "device_os", "source"]
 SCALE_COLS       = ["days_since_request", "session_length_in_minutes", "intended_balcon_amount"]
 TARGET           = "fraud_bool"
+
+# features dropped — synthetic perturbed values with no interpretable meaning
+DROP_COLS = [
+    "velocity_6h", "velocity_24h", "velocity_4w",
+    "zip_count_4w", "bank_branch_count_8w", "device_fraud_count",
+]
 
 
 class FraudPreprocessor:
@@ -46,16 +61,20 @@ class FraudPreprocessor:
 
         return {"nan_counts": nan_cols.to_dict(), "sentinel_counts": sentinel_counts}
 
+    def drop_uninterpretable(self, df):
+        cols = [c for c in DROP_COLS if c in df.columns]
+        df = df.drop(columns=cols)
+        print(f"dropped {len(cols)} uninterpretable columns: {cols}")
+        return df
+
     def engineer_features(self, df):
         df = df.copy()
 
         # -1 means the field wasn't provided, treat as a flag
-        df["has_prev_address"]      = (df["prev_address_months_count"] != -1).astype(int)
-        df["is_dirty_device"]       = (df["device_fraud_count"] > 0).astype(int)
+        df["has_prev_address"]       = (df["prev_address_months_count"] != -1).astype(int)
 
-        # short-window vs long-window velocity
-        df["velocity_ratio"]        = df["velocity_6h"] / (df["velocity_4w"] + 1)
-        df["credit_to_income_ratio"]= df["proposed_credit_limit"] / (df["income"] + 1)
+        # credit limit requested relative to income
+        df["credit_to_income_ratio"] = df["proposed_credit_limit"] / (df["income"] + 1)
 
         return df
 
@@ -96,6 +115,7 @@ class FraudPreprocessor:
     def run(self, filepath, save=True):
         df = self.load(filepath)
         self.audit(df)
+        df = self.drop_uninterpretable(df)
         df = self.engineer_features(df)
         df = self.encode_categoricals(df)
 
