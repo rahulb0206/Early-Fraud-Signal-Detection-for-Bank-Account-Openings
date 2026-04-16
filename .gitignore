@@ -5,7 +5,8 @@ __pycache__/
 *.pyc
 .env
 *.csv
-*.pkl
+# rf_baseline.pkl excluded — 224MB exceeds GitHub limit
+main/code/models/rf_baseline.pkl
 *.joblib
 main/Base.csv
 main/MY_PROCESS_LOG.md
