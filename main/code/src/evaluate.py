@@ -1,13 +1,17 @@
-# Evaluation module for the fraud detection models.
-#
-# Loads trained models and test splits, computes all metrics at a fixed 5% FPR
-# threshold (not 0.5 — default threshold is meaningless for imbalanced fraud data).
-# Metrics: Recall, Precision, F1, PR-AUC, ROC-AUC, Gini, KS statistic.
-# Also runs a failure mode analysis — breaks down what kinds of applications
-# the model misses (false negatives) and wrongly flags (false positives).
-# Temporal drift check compares performance on month 6 vs month 7 separately.
-#
-# run from main/code/: python src/evaluate.py
+"""
+Evaluation module for the fraud detection models.
+
+Loads trained models and test splits, computes all metrics at a fixed 5% FPR
+threshold (not 0.5, which is meaningless for imbalanced fraud data).
+Metrics: Recall, Precision, F1, PR-AUC, ROC-AUC, Gini, KS statistic.
+
+Also runs a failure mode analysis to break down what kinds of applications
+the model misses (false negatives) and wrongly flags (false positives).
+Temporal drift check compares performance on month 6 vs month 7 separately.
+
+Run from main/code/:
+    python src/evaluate.py
+"""
 
 import os
 import joblib
@@ -59,7 +63,7 @@ class EvaluationEngine:
         gini      = 2 * roc_auc - 1
         cm        = confusion_matrix(self.y_test, preds)
 
-        # KS statistic — separation between fraud and legit score distributions
+        # KS statistic: separation between fraud and legit score distributions
         fraud_scores  = probs[self.y_test == 1]
         legit_scores  = probs[self.y_test == 0]
         ks_stat, _    = ks_2samp(fraud_scores, legit_scores)
@@ -106,12 +110,12 @@ class EvaluationEngine:
         print(f"false positives (legit flagged): {fp_mask.sum():,}")
         print(f"true positives  (fraud caught) : {tp_mask.sum():,}")
 
-        # compare key features between caught vs missed fraud
+        # compare key features: avg values for caught fraud vs missed fraud
         check_cols = [c for c in ["velocity_6h", "velocity_ratio", "credit_risk_score",
                                    "is_dirty_device", "has_prev_address",
                                    "credit_to_income_ratio"] if c in self.X_test.columns]
         if check_cols:
-            print("\n  avg feature values — caught fraud vs missed fraud:")
+            print("\n  avg feature values (caught fraud vs missed fraud):")
             print(f"  {'feature':<30} {'caught':>10} {'missed':>10}")
             for col in check_cols:
                 caught_mean = tp_df[col].mean() if len(tp_df) else float("nan")
@@ -138,8 +142,8 @@ class EvaluationEngine:
             return
 
         if len(test_raw) != len(self.X_test):
-            print(f"  row count mismatch — raw test {len(test_raw)} vs X_test {len(self.X_test)}")
-            print("  skipping drift check — make sure Base.csv matches the preprocessed splits")
+            print(f"  row count mismatch: raw test {len(test_raw)} vs X_test {len(self.X_test)}")
+            print("  skipping drift check; make sure Base.csv matches the preprocessed splits")
             return
 
         model_file = f"{self.model_dir}/{'xgb_model.pkl' if 'SMOTE' not in model_label else 'xgb_smote.pkl'}"
@@ -221,7 +225,7 @@ class EvaluationEngine:
         lines1, labels1 = ax1.get_legend_handles_labels()
         lines2, labels2 = ax2.get_legend_handles_labels()
         ax1.legend(lines1 + lines2, labels1 + labels2, loc="center right")
-        plt.title(f"Threshold Analysis — {model_label}")
+        plt.title(f"Threshold Analysis: {model_label}")
         plt.tight_layout()
         plt.savefig(f"{self.fig_dir}/threshold_analysis.png", dpi=150)
         plt.close()
@@ -240,7 +244,7 @@ class EvaluationEngine:
         for label, fname in models.items():
             path = f"{self.model_dir}/{fname}"
             if not os.path.exists(path):
-                print(f"skipping {label} — {path} not found")
+                print(f"skipping {label}: {path} not found")
                 continue
             model = joblib.load(path)
             r = self.evaluate_model(model, label)
@@ -253,7 +257,7 @@ class EvaluationEngine:
             self.failure_mode_analysis(results, model_label="XGBoost")
             self.temporal_drift(base_csv_path=base_csv_path)
 
-        print("\nall done — figures saved to outputs/figures/")
+        print("\nall done. figures saved to outputs/figures/")
         return results
 
 

@@ -1,28 +1,31 @@
-# SHAP explainability for the fraud detection model.
-#
-# Uses TreeExplainer (exact, not approximate) on the primary XGBoost model.
-# Generates:
-#   - shap_summary_bar.png       : global mean |SHAP| per feature (top 20)
-#   - shap_summary_beeswarm.png  : direction + magnitude of each feature's impact
-#   - shap_waterfall_tp.png      : why the model correctly caught a fraud case
-#   - shap_waterfall_fn.png      : why the model missed a fraud case
-#   - shap_waterfall_fp.png      : why the model wrongly flagged a legit case
-#   - shap_values.csv            : full SHAP matrix for all test rows (used by Streamlit app)
-#
-# Key purpose: gain-based feature importance (from train.py) is biased toward
-# binary/high-cardinality features and features used in early splits. SHAP
-# corrects for this by attributing each feature's contribution accounting for
-# all possible feature orderings — giving a fairer global ranking and honest
-# per-prediction explanations.
-#
-# run from main/code/: python src/explain.py
+"""
+SHAP explainability for the fraud detection model.
+
+Uses XGBoost's native pred_contribs=True (exact, not approximate) on the primary model.
+Generates:
+    shap_summary_bar.png       : global mean |SHAP| per feature (top 20)
+    shap_summary_beeswarm.png  : direction and magnitude of each feature's impact
+    shap_waterfall_tp.png      : why the model correctly caught a fraud case
+    shap_waterfall_fn.png      : why the model missed a fraud case
+    shap_waterfall_fp.png      : why the model wrongly flagged a legit case
+    shap_values.csv            : full SHAP matrix for all test rows (used by Streamlit app)
+
+Key purpose: gain-based feature importance (from train.py) is biased toward
+binary and high-cardinality features used in early splits. SHAP corrects for
+this by attributing each feature's contribution accounting for all possible
+feature orderings, giving a fairer global ranking and honest per-prediction
+explanations.
+
+Run from main/code/:
+    python src/explain.py
+"""
 
 import os
 import joblib
 import numpy as np
 import pandas as pd
 import matplotlib
-matplotlib.use("Agg")   # non-interactive backend — no display needed
+matplotlib.use("Agg")   # non-interactive backend, no display needed
 import matplotlib.pyplot as plt
 import shap
 import xgboost as xgb
@@ -33,7 +36,7 @@ Y_TEST_PATH = "outputs/y_test.csv"
 FIG_DIR     = "outputs/figures"
 OUT_DIR     = "outputs"
 
-# how many rows to compute SHAP on — full 205k is slow, 20k is representative
+# how many rows to compute SHAP on; full 205k is slow, 20k is representative
 SHAP_SAMPLE = 20_000
 RANDOM_SEED = 42
 
@@ -57,8 +60,8 @@ class SHAPExplainer:
         print(f"fraud cases : {self.y_test.sum():,} ({self.y_test.mean()*100:.2f}%)")
 
     def _xgb_shap(self, X):
-        # use XGBoost's native SHAP computation — avoids shap/xgboost version conflicts
-        # pred_contribs=True returns shape (n, n_features+1) where last col is bias
+        # use XGBoost's native SHAP computation to avoid shap/xgboost version conflicts
+        # pred_contribs=True returns shape (n, n_features+1) where last col is the bias term
         dmatrix = xgb.DMatrix(X, feature_names=list(X.columns))
         contribs = self.model.get_booster().predict(dmatrix, pred_contribs=True)
         shap_values = contribs[:, :-1]   # drop last col (bias term)
@@ -66,7 +69,7 @@ class SHAPExplainer:
         return shap_values, bias
 
     def compute_shap(self):
-        # sample for global plots — stratified to preserve fraud rate
+        # sample for global plots; stratified to preserve fraud rate
         rng = np.random.default_rng(RANDOM_SEED)
         fraud_idx = self.y_test[self.y_test == 1].index.tolist()
         legit_idx = self.y_test[self.y_test == 0].index.tolist()
@@ -92,8 +95,8 @@ class SHAPExplainer:
         print(f"saved -> {OUT_DIR}/shap_values.csv")
 
     def plot_summary_bar(self):
-        # mean absolute SHAP value per feature — honest global importance
-        # compare this with the gain-based chart from evaluate.py to see the difference
+        # mean absolute SHAP value per feature; honest global importance
+        # compare with the gain-based chart from evaluate.py to see the bias difference
         os.makedirs(FIG_DIR, exist_ok=True)
         mean_abs_shap = np.abs(self.shap_vals).mean(axis=0)
         feature_names = self.X_sample.columns.tolist()
@@ -106,7 +109,7 @@ class SHAPExplainer:
             color="steelblue"
         )
         ax.set_xlabel("Mean |SHAP Value|")
-        ax.set_title("Global Feature Importance — Mean |SHAP Value| (Top 20)\n"
+        ax.set_title("Global Feature Importance: Mean |SHAP Value| (Top 20)\n"
                      "SHAP corrects for gain-bias: continuous features no longer undervalued",
                      fontsize=11)
         plt.tight_layout()
@@ -115,8 +118,8 @@ class SHAPExplainer:
         print(f"saved -> {FIG_DIR}/shap_summary_bar.png")
 
     def plot_summary_beeswarm(self):
-        # beeswarm via shap — each dot = one sample, colour = feature value
-        # shows both magnitude AND direction of each feature's impact on fraud probability
+        # beeswarm via shap; each dot = one sample, colour = feature value
+        # shows both magnitude and direction of each feature's impact on fraud probability
         os.makedirs(FIG_DIR, exist_ok=True)
         shap.summary_plot(
             self.shap_vals,
@@ -125,7 +128,7 @@ class SHAPExplainer:
             max_display=20,
             show=False,
         )
-        plt.title("Feature Impact Direction — SHAP Beeswarm (Top 20)\n"
+        plt.title("Feature Impact Direction: SHAP Beeswarm (Top 20)\n"
                   "Red = high feature value, Blue = low. Right = pushes toward fraud.",
                   fontsize=11)
         plt.tight_layout()
@@ -176,9 +179,9 @@ class SHAPExplainer:
         fp_row = fp_idx[np.argmax(probs[fp_idx])]    # highest fraud score among wrong flags
 
         print(f"\ngenerating waterfall plots...")
-        self._waterfall(tp_row, "True Positive — Correctly Caught Fraud", "shap_waterfall_tp.png")
-        self._waterfall(fn_row, "False Negative — Fraud the Model Missed", "shap_waterfall_fn.png")
-        self._waterfall(fp_row, "False Positive — Legitimate Application Wrongly Flagged", "shap_waterfall_fp.png")
+        self._waterfall(tp_row, "True Positive: Correctly Caught Fraud", "shap_waterfall_tp.png")
+        self._waterfall(fn_row, "False Negative: Fraud the Model Missed", "shap_waterfall_fn.png")
+        self._waterfall(fp_row, "False Positive: Legitimate Application Wrongly Flagged", "shap_waterfall_fp.png")
 
     def run(self):
         self.load()
@@ -186,7 +189,7 @@ class SHAPExplainer:
         self.plot_summary_bar()
         self.plot_summary_beeswarm()
         self.plot_waterfalls()
-        print("\nall done — SHAP outputs saved to outputs/figures/ and outputs/")
+        print("\nall done. SHAP outputs saved to outputs/figures/ and outputs/")
         print("\nkey check: compare shap_summary_bar.png with the gain-based feature_importance.png")
         print("if credit_risk_score and name_email_similarity rank higher in SHAP,")
         print("that confirms gain-bias was suppressing continuous features in the original chart.")

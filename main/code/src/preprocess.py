@@ -1,20 +1,26 @@
-# Preprocessing pipeline
-# Loads Base.csv, engineers a few features, one-hot encodes categoricals,
-# does a temporal train/test split (months 0-5 train, 6-7 test), and
-# MinMax-scales three skewed columns on train only to avoid leakage.
-# Saves the fitted scaler and the four split CSVs so other notebooks
-# can just load them directly without re-running this.
-#
-# Columns dropped before training — synthetic/uninterpretable values:
-#   velocity_6h, velocity_24h, velocity_4w  — perturbed synthetic values with
-#     inverted order (6h mean > 4w mean) and negative values. Not interpretable.
-#   velocity_ratio                          — engineered from velocity, goes with them.
-#   zip_count_4w                            — up to 6,700 per zip, clearly synthetic.
-#   bank_branch_count_8w                    — up to 2,385 visits in 8 weeks, impossible.
-#   device_fraud_count                      — entire column is 0. No signal.
-#   is_dirty_device                         — derived from device_fraud_count, also all 0.
-#
-# run from main/code/: python src/preprocess.py
+"""
+Preprocessing pipeline for the bank account fraud detection project.
+
+Loads Base.csv, engineers features, one-hot encodes categoricals, performs a
+temporal train/test split (months 0-5 train, months 6-7 test), and MinMax-scales
+three skewed columns fitted on training data only to prevent leakage.
+
+Saves the fitted scaler and the four split CSVs to models/ and outputs/ so
+downstream steps can load them without re-running this script.
+
+Columns dropped before training (synthetic or uninterpretable values):
+    velocity_6h, velocity_24h, velocity_4w  : synthetic perturbation caused
+        inverted order (6h mean > 4w mean) with negative values. Not usable.
+    velocity_ratio                          : derived from velocity columns, removed with them.
+    zip_count_4w                            : up to 6,700 applications per ZIP in 4 weeks.
+                                              Clearly synthetic, not real geography.
+    bank_branch_count_8w                    : up to 2,385 branch visits in 8 weeks. Impossible.
+    device_fraud_count                      : entire column is 0 across all rows. No signal.
+    is_dirty_device                         : derived from device_fraud_count, also all 0.
+
+Run from main/code/:
+    python src/preprocess.py
+"""
 
 import os
 import joblib
@@ -26,7 +32,7 @@ CATEGORICAL_COLS = ["payment_type", "employment_status", "housing_status", "devi
 SCALE_COLS       = ["days_since_request", "session_length_in_minutes", "intended_balcon_amount"]
 TARGET           = "fraud_bool"
 
-# features dropped — synthetic perturbed values with no interpretable meaning
+# columns dropped: synthetic perturbed values with no interpretable meaning
 DROP_COLS = [
     "velocity_6h", "velocity_24h", "velocity_4w",
     "zip_count_4w", "bank_branch_count_8w", "device_fraud_count",
@@ -70,10 +76,10 @@ class FraudPreprocessor:
     def engineer_features(self, df):
         df = df.copy()
 
-        # -1 means the field wasn't provided, treat as a flag
+        # -1 is the sentinel for "no prior address provided"; make it an explicit binary flag
         df["has_prev_address"]       = (df["prev_address_months_count"] != -1).astype(int)
 
-        # credit limit requested relative to income
+        # credit limit requested relative to income (+1 avoids division by zero)
         df["credit_to_income_ratio"] = df["proposed_credit_limit"] / (df["income"] + 1)
 
         return df
@@ -87,7 +93,7 @@ class FraudPreprocessor:
         return df
 
     def temporal_split(self, df):
-        # no random split — preserve time order so test is truly unseen future data
+        # temporal split: preserves time order so test set is truly unseen future data
         train = df[df["month"] <= 5].drop(columns=["month"]).copy()
         test  = df[df["month"] >= 6].drop(columns=["month"]).copy()
 
@@ -119,7 +125,7 @@ class FraudPreprocessor:
         df = self.engineer_features(df)
         df = self.encode_categoricals(df)
 
-        # split before scaling — scaler must only see training data
+        # split before scaling: scaler is fitted on train only to prevent test leakage
         X_train, X_test, y_train, y_test = self.temporal_split(df)
         X_train = self.scale(X_train, fit=True)
         X_test  = self.scale(X_test,  fit=False)

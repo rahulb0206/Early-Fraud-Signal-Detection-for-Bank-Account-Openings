@@ -1,11 +1,19 @@
-# Trains Random Forest (baseline) and XGBoost (primary) on the preprocessed splits.
-# RF runs on raw imbalanced data — no tuning, just a benchmark.
-# XGBoost runs twice: once with scale_pos_weight=89.7, once on SMOTE-oversampled data.
-# Both XGB variants get a light grid search over key hyperparameters.
-# All models saved to models/ as .pkl files.
-#
-# run from main/code/: python src/train.py
-# expects outputs/X_train.csv etc. to already exist (run preprocess.py first)
+"""
+Model training for the bank account fraud detection project.
+
+Trains three models on the preprocessed splits from preprocess.py:
+    1. Random Forest (baseline): no imbalance handling, no tuning. Lower bound benchmark.
+    2. XGBoost with scale_pos_weight=89.7: primary model. Corrects 89:1 class imbalance
+       by reweighting fraud cases in the loss function without modifying the data.
+    3. XGBoost with SMOTE: alternative approach. Oversamples fraud cases in training data
+       to a 10:1 ratio before fitting. Test set is never touched.
+
+Both XGBoost variants are tuned with GridSearchCV using 3-fold StratifiedKFold
+scored on recall. All trained models are saved to models/ as .pkl files.
+
+Run from main/code/ (requires preprocess.py to have run first):
+    python src/train.py
+"""
 
 import os
 import joblib
@@ -17,8 +25,8 @@ from sklearn.metrics import recall_score, precision_score, f1_score, roc_auc_sco
 from xgboost import XGBClassifier
 from imblearn.over_sampling import SMOTE
 
-SCALE_POS_WEIGHT = 89.7   # 988971 / 11029
-N_JOBS = 2               # cap parallelism — -1 copies full dataset per core
+SCALE_POS_WEIGHT = 89.7   # 989,971 legit / 11,029 fraud
+N_JOBS = 2               # capped at 2: -1 copies the full dataset per core and exhausts memory
 
 
 class ModelTrainer:
@@ -36,11 +44,11 @@ class ModelTrainer:
         self.X_test  = pd.read_csv(f"{self.data_dir}/X_test.csv")
         self.y_train = pd.read_csv(f"{self.data_dir}/y_train.csv").squeeze()
         self.y_test  = pd.read_csv(f"{self.data_dir}/y_test.csv").squeeze()
-        print(f"loaded — train: {self.X_train.shape}  test: {self.X_test.shape}")
+        print(f"loaded  train: {self.X_train.shape}  test: {self.X_test.shape}")
         print(f"train fraud rate: {self.y_train.mean()*100:.2f}%   test: {self.y_test.mean()*100:.2f}%")
 
     def _quick_eval(self, model, label):
-        # threshold at 0.5 for a quick sanity check — proper eval is in evaluate.py
+        # threshold at 0.5 for a quick sanity check; proper eval with cost-based threshold is in evaluate.py
         probs = model.predict_proba(self.X_test)[:, 1]
         preds = (probs >= 0.5).astype(int)
         recall    = recall_score(self.y_test, preds, zero_division=0)
@@ -52,7 +60,7 @@ class ModelTrainer:
         return {"recall": recall, "precision": precision, "f1": f1, "roc_auc": roc_auc}
 
     def train_baseline_rf(self):
-        # no tuning, no imbalance handling — purely a naive benchmark
+        # no tuning, no imbalance handling; purely a naive benchmark
         print("\ntraining Random Forest baseline...")
         rf = RandomForestClassifier(
             n_estimators=100,
@@ -80,7 +88,6 @@ class ModelTrainer:
         }
         base_xgb = XGBClassifier(
             scale_pos_weight=SCALE_POS_WEIGHT,
-            use_label_encoder=False,
             eval_metric="aucpr",
             tree_method="hist",
             random_state=42,
@@ -105,11 +112,11 @@ class ModelTrainer:
         return best_xgb
 
     def train_xgb_smote(self):
-        # SMOTE only on training data — test set stays untouched
+        # SMOTE only on training data; test set stays untouched
         print("\napplying SMOTE to training set...")
         sm = SMOTE(random_state=42, sampling_strategy=0.1)
         X_res, y_res = sm.fit_resample(self.X_train, self.y_train)
-        print(f"after SMOTE — fraud: {y_res.sum():,}  legit: {(y_res==0).sum():,}")
+        print(f"after SMOTE  fraud: {y_res.sum():,}  legit: {(y_res==0).sum():,}")
 
         print("training XGBoost (SMOTE)...")
         param_grid = {
@@ -118,7 +125,6 @@ class ModelTrainer:
             "learning_rate": [0.05, 0.1],
         }
         base_xgb = XGBClassifier(
-            use_label_encoder=False,
             eval_metric="aucpr",
             tree_method="hist",
             random_state=42,
@@ -154,7 +160,7 @@ class ModelTrainer:
         print(f"  {self.model_dir}/rf_baseline.pkl")
         print(f"  {self.model_dir}/xgb_model.pkl      <- primary model")
         print(f"  {self.model_dir}/xgb_smote.pkl")
-        print("run evaluate.py to get full metrics at 5% FPR threshold")
+        print("run evaluate.py to get full metrics at the cost-based threshold")
         return rf, xgb, xgb_smote
 
 
